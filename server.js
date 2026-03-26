@@ -32,8 +32,8 @@ function extractCredentials(req) {
   return { username, password };
 }
 
-// --- Pipe a request to the real provider ---
-function proxyRequest(targetUrl, req, res) {
+// --- Pipe a request to the real provider (follows redirects) ---
+function proxyRequest(targetUrl, req, res, maxRedirects = 5) {
   const parsed = new URL(targetUrl);
   const client = parsed.protocol === "https:" ? https : http;
 
@@ -49,6 +49,24 @@ function proxyRequest(targetUrl, req, res) {
   };
 
   const proxyReq = client.request(options, (proxyRes) => {
+    console.log(`[PROXY] Response from provider: ${proxyRes.statusCode} ${targetUrl}`);
+
+    // Follow redirects (301, 302, 303, 307, 308)
+    if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
+      if (maxRedirects <= 0) {
+        console.error("[PROXY] Too many redirects");
+        return res.status(502).json({ error: "Too many redirects" });
+      }
+
+      // Resolve relative redirect URLs
+      const redirectUrl = new URL(proxyRes.headers.location, targetUrl).toString();
+      console.log(`[PROXY] Following redirect → ${redirectUrl}`);
+
+      // Consume the response body before following redirect
+      proxyRes.resume();
+      return proxyRequest(redirectUrl, req, res, maxRedirects - 1);
+    }
+
     // Forward status and headers
     res.writeHead(proxyRes.statusCode, proxyRes.headers);
     proxyRes.pipe(res, { end: true });
