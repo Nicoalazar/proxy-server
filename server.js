@@ -89,10 +89,12 @@ app.all("/player_api.php", (req, res) => {
 // =====================================================
 // 2) get.php — M3U playlist download
 // =====================================================
-app.get("/get.php", (req, res) => {
+app.all("/get.php", (req, res) => {
+  console.log(`[M3U] Incoming request: ${req.method} ${req.originalUrl}`);
   const { username, password } = extractCredentials(req);
 
   if (!authenticate(username, password)) {
+    console.log(`[M3U] Auth failed for user: ${username}`);
     return res.status(401).send("Unauthorized");
   }
 
@@ -101,7 +103,7 @@ app.get("/get.php", (req, res) => {
   params.set("password", PROVIDER_PASSWORD);
 
   const targetUrl = `${PROVIDER_URL}/get.php?${params.toString()}`;
-  console.log(`[M3U] get.php → ${PROVIDER_URL}`);
+  console.log(`[M3U] Proxying to: ${targetUrl}`);
 
   proxyRequest(targetUrl, req, res);
 });
