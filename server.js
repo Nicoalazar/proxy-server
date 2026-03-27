@@ -37,19 +37,30 @@ function proxyRequest(targetUrl, req, res, maxRedirects = 5) {
   const parsed = new URL(targetUrl);
   const client = parsed.protocol === "https:" ? https : http;
 
+  // Forward important client headers, override User-Agent
+  const forwardHeaders = {};
+  const headersToForward = [
+    "accept", "accept-encoding", "accept-language",
+    "range", "if-range", "if-none-match", "if-modified-since",
+    "connection", "cache-control",
+  ];
+  for (const h of headersToForward) {
+    if (req.headers[h]) forwardHeaders[h] = req.headers[h];
+  }
+  // Always use Magma Player UA (provider may filter by this)
+  forwardHeaders["user-agent"] = "Magma Player/10";
+  if (!forwardHeaders["accept"]) forwardHeaders["accept"] = "*/*";
+
   const options = {
     hostname: parsed.hostname,
     port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
     path: parsed.pathname + parsed.search,
     method: req.method,
-    headers: {
-      "User-Agent": req.headers["user-agent"] || "Mozilla/5.0",
-      Accept: "*/*",
-    },
+    headers: forwardHeaders,
   };
 
   const proxyReq = client.request(options, (proxyRes) => {
-    console.log(`[PROXY] Response from provider: ${proxyRes.statusCode} ${targetUrl}`);
+    console.log(`[PROXY] ${proxyRes.statusCode} ${parsed.pathname}`);
 
     // Follow redirects (301, 302, 303, 307, 308)
     if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && proxyRes.headers.location) {
@@ -58,28 +69,29 @@ function proxyRequest(targetUrl, req, res, maxRedirects = 5) {
         return res.status(502).json({ error: "Too many redirects" });
       }
 
-      // Resolve relative redirect URLs
       const redirectUrl = new URL(proxyRes.headers.location, targetUrl).toString();
-      console.log(`[PROXY] Following redirect → ${redirectUrl}`);
-
-      // Consume the response body before following redirect
+      console.log(`[PROXY] Redirect → ${redirectUrl}`);
       proxyRes.resume();
       return proxyRequest(redirectUrl, req, res, maxRedirects - 1);
     }
 
-    // Forward status and headers
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    // Clean up headers before forwarding to client
+    const responseHeaders = { ...proxyRes.headers };
+    // Remove headers that could conflict with proxy
+    delete responseHeaders["transfer-encoding"];
+    delete responseHeaders["content-security-policy"];
+
+    res.writeHead(proxyRes.statusCode, responseHeaders);
     proxyRes.pipe(res, { end: true });
   });
 
   proxyReq.on("error", (err) => {
-    console.error(`Proxy error: ${err.message}`);
+    console.error(`[PROXY] Error: ${err.message}`);
     if (!res.headersSent) {
       res.status(502).json({ error: "Bad gateway", details: err.message });
     }
   });
 
-  // Forward request body if any
   req.pipe(proxyReq, { end: true });
 }
 
